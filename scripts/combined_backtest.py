@@ -64,26 +64,26 @@ def prepare_signals(symbol: str) -> pd.DataFrame:
 
     probas = ensemble.predict_proba(X_test)
 
-    # Regime detection
+    # Load saved regime detector (fitted on training data only — no test leakage)
     regime_scalars = np.ones(len(test_df))
+    regime_path = os.path.join(str(PROJECT_ROOT / "models" / "saved"), f"{symbol}_regime.joblib")
     h4_data = connector.load_data(symbol, config["timeframes"]["regime"], data_dir)
-    if not h4_data.empty:
+    if os.path.exists(regime_path) and not h4_data.empty:
         regime = RegimeDetector(n_states=3)
-        regime.fit(h4_data)
-        if regime._fitted:
-            try:
-                h4_scalars = regime.get_size_scalar(h4_data)
-                h4_scalars.index = h4_scalars.index.tz_localize(None) if h4_scalars.index.tz else h4_scalars.index
-                test_idx = test_df.index.tz_localize(None) if test_df.index.tz else test_df.index
-                regime_reindexed = h4_scalars.reindex(test_idx, method="ffill").fillna(1.0)
-                regime_scalars = regime_reindexed.values
-            except Exception:
-                pass
+        regime.load(regime_path)
+        try:
+            h4_scalars = regime.get_size_scalar(h4_data)
+            h4_scalars.index = h4_scalars.index.tz_localize(None) if h4_scalars.index.tz else h4_scalars.index
+            test_idx = test_df.index.tz_localize(None) if test_df.index.tz else test_df.index
+            regime_reindexed = h4_scalars.reindex(test_idx, method="ffill").fillna(1.0)
+            regime_scalars = regime_reindexed.values
+        except Exception:
+            pass
 
-    # Build signals
+    # Build signals — use validation-calibrated median from model (no test leakage)
     risk_cfg = config.get("risk", {})
     signal_offset = risk_cfg.get("signal_offset", 0.02)
-    median_proba = np.median(probas)
+    median_proba = ensemble._median_proba  # Calibrated from validation set
     buy_thresh = median_proba + signal_offset
     sell_thresh = median_proba - signal_offset
 
@@ -96,7 +96,7 @@ def prepare_signals(symbol: str) -> pd.DataFrame:
         signals["signal"] == 1,
         (probas - median_proba) / (1 - median_proba),
         np.where(signals["signal"] == -1, (median_proba - probas) / median_proba, 0.5),
-    ).clip(0.3, 1.0)
+    ).clip(0.5, 1.0)
 
     signals["atr"] = test_df["atr"].values
     signals["regime_scalar"] = regime_scalars
@@ -117,8 +117,10 @@ def combined_backtest(
 ) -> BacktestResult:
     """Run combined backtest across all instruments with shared equity."""
     initial_balance = config.get("account", {}).get("initial_balance", 100_000)
-    max_daily_loss = config.get("ftmo_limits", {}).get("max_daily_loss_pct", 5.0) / 100
-    max_total_loss = config.get("ftmo_limits", {}).get("max_total_loss_pct", 10.0) / 100
+    # Use internal safety buffers (stricter than FTMO hard limits)
+    risk_cfg_halts = config.get("risk", {})
+    max_daily_loss = risk_cfg_halts.get("daily_loss_halt_pct", 4.0) / 100
+    max_total_loss = risk_cfg_halts.get("total_drawdown_halt_pct", 9.0) / 100
     phase1_target = config.get("account", {}).get("phase1_target_pct", 10.0) / 100
     phase2_target = config.get("account", {}).get("phase2_target_pct", 5.0) / 100
     risk_cfg = config.get("risk", {})
@@ -164,7 +166,8 @@ def combined_backtest(
     halted_daily = False
     halted_total = False
     trades_today = 0
-    open_positions = 0
+    # Track active positions per instrument: {symbol: list of close_timestamps}
+    active_by_symbol = {}
 
     for event in events:
         ts = event["time"]
@@ -193,6 +196,40 @@ def combined_backtest(
         if trades_today >= max_trades_per_day:
             continue
 
+        # Expire closed positions per instrument
+        prices = prices_map[event["prices_ref"]]
+        price_idx = event["price_idx"]
+        sym = event["symbol"]
+
+        # Expire same-symbol positions by bar index (indices are only valid within same instrument)
+        if sym in active_by_symbol:
+            active_by_symbol[sym] = [
+                (cb, pref_id) for cb, pref_id in active_by_symbol[sym] if cb > price_idx
+            ]
+
+        # Expire cross-instrument positions by timestamp
+        # Each position stores (close_bar, prices_ref) — convert close_bar to timestamp
+        for other_sym in list(active_by_symbol.keys()):
+            if other_sym == sym:
+                continue
+            # For other instruments, we stored (close_bar, prices_ref_id)
+            remaining = []
+            for cb, pref_id in active_by_symbol[other_sym]:
+                other_prices = prices_map[pref_id]
+                if cb < len(other_prices):
+                    close_time = other_prices.index[cb]
+                    if close_time > ts:
+                        remaining.append((cb, pref_id))
+                # If cb >= len, position already expired
+            active_by_symbol[other_sym] = remaining
+
+        # Count total active positions across all instruments
+        total_active = sum(len(v) for v in active_by_symbol.values())
+
+        # Enforce concurrent position limit
+        if total_active >= max_concurrent:
+            continue
+
         # Position sizing with confidence and regime
         effective_risk = risk_per_trade * event["confidence"] * event["regime_scalar"]
         risk_amount = balance * effective_risk
@@ -203,15 +240,17 @@ def combined_backtest(
         sl_dist = sl_atr_mult * atr
         tp_dist = tp_atr_mult * atr
 
-        prices = prices_map[event["prices_ref"]]
-        price_idx = event["price_idx"]
-        entry_price = prices["close"].iloc[price_idx]
+        # Enter on NEXT bar's open (realistic: can't enter at signal bar close)
+        if price_idx + 1 >= len(prices):
+            continue
+        entry_price = prices["open"].iloc[price_idx + 1]
 
-        # Simulate trade
+        # Simulate trade starting from bar after entry, track close bar
         trade_pnl = 0.0
         max_bars = 8
+        close_bar = price_idx + 1 + max_bars  # Default: time barrier
         for j in range(1, max_bars + 1):
-            idx = price_idx + j
+            idx = price_idx + 1 + j
             if idx >= len(prices):
                 break
             bar_high = prices["high"].iloc[idx]
@@ -220,21 +259,31 @@ def combined_backtest(
             if event["signal"] == 1:  # Long
                 if bar_high >= entry_price + tp_dist:
                     trade_pnl = tp_dist
+                    close_bar = idx
                     break
                 if bar_low <= entry_price - sl_dist:
                     trade_pnl = -sl_dist
+                    close_bar = idx
                     break
             else:  # Short
                 if bar_low <= entry_price - tp_dist:
                     trade_pnl = tp_dist
+                    close_bar = idx
                     break
                 if bar_high >= entry_price + sl_dist:
                     trade_pnl = -sl_dist
+                    close_bar = idx
                     break
         else:
-            final_idx = min(price_idx + max_bars, len(prices) - 1)
+            final_idx = min(price_idx + 1 + max_bars, len(prices) - 1)
             final_close = prices["close"].iloc[final_idx]
             trade_pnl = (final_close - entry_price) * event["signal"]
+            close_bar = final_idx
+
+        # Track this position as active until it closes
+        if sym not in active_by_symbol:
+            active_by_symbol[sym] = []
+        active_by_symbol[sym].append((close_bar, event["prices_ref"]))
 
         # Spread cost
         spread_cost = atr * 0.01
@@ -283,14 +332,27 @@ def combined_backtest(
         if len(daily_returns) > 0 and daily_returns.std() > 0:
             result.sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
 
-        peak = result.equity_curve.cummax()
-        drawdown = (result.equity_curve - peak) / peak
-        result.max_drawdown = abs(drawdown.min())
+        # FTMO total drawdown: lowest equity relative to initial balance
+        # (Did balance ever drop below initial - 10%?)
+        min_equity = result.equity_curve.min()
+        ftmo_total_dd = max(0, (initial_balance - min_equity) / initial_balance)
+        result.max_drawdown = ftmo_total_dd
 
     if daily_balances:
         daily_pnl = pd.Series(daily_balances)
         result.daily_pnl = daily_pnl
-        result.max_daily_drawdown = abs(daily_pnl.min()) / initial_balance
+        # FTMO daily DD: worst day loss as % of that day's start balance
+        # Track day-start balances to compute correctly
+        running_balance = initial_balance
+        worst_daily_dd_pct = 0.0
+        for d in sorted(daily_balances.keys()):
+            day_start = running_balance
+            day_pnl = daily_balances[d]
+            if day_start > 0 and day_pnl < 0:
+                dd_pct = abs(day_pnl) / day_start
+                worst_daily_dd_pct = max(worst_daily_dd_pct, dd_pct)
+            running_balance += day_pnl
+        result.max_daily_drawdown = worst_daily_dd_pct
 
     if trades:
         wins = [t for t in trades if t.pnl > 0]

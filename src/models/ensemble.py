@@ -58,6 +58,7 @@ class StackingEnsemble:
             C=1.0, max_iter=1000, random_state=42
         )
         self._fitted = False
+        self._median_proba = 0.5  # Calibrated from validation set
 
     def fit(self, X: np.ndarray, y: np.ndarray, cv_splits=5):
         """Train base learners and meta-learner via stacking.
@@ -124,14 +125,19 @@ class StackingEnsemble:
 
     def save(self, path: str):
         joblib.dump(
-            {"base_models": self.base_models, "meta_learner": self.meta_learner},
+            {
+                "base_models": self.base_models,
+                "meta_learner": self.meta_learner,
+                "median_proba": self._median_proba,
+            },
             path,
         )
-        logger.info(f"Ensemble saved to {path}")
+        logger.info(f"Ensemble saved to {path} (median_proba={self._median_proba:.4f})")
 
     def load(self, path: str):
         data = joblib.load(path)
         self.base_models = data["base_models"]
         self.meta_learner = data["meta_learner"]
+        self._median_proba = data.get("median_proba", 0.5)
         self._fitted = True
-        logger.info(f"Ensemble loaded from {path}")
+        logger.info(f"Ensemble loaded from {path} (median_proba={self._median_proba:.4f})")

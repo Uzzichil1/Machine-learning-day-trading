@@ -130,11 +130,14 @@ class FTMOBacktester:
             sl_dist = sl_atr_mult * atr
             tp_dist = tp_atr_mult * atr
 
-            entry_price = prices["close"].iloc[i]
+            # Enter on NEXT bar's open (realistic: you can't enter at signal bar close)
+            if i + 1 >= len(prices):
+                continue
+            entry_price = prices["open"].iloc[i + 1]
 
-            # Simulate trade outcome using future bars
+            # Simulate trade outcome starting from bar after entry
             trade_pnl = self._simulate_trade(
-                prices, i, signal, entry_price, sl_dist, tp_dist, max_bars=8
+                prices, i + 1, signal, entry_price, sl_dist, tp_dist, max_bars=8
             )
 
             # Apply spread cost
@@ -228,17 +231,24 @@ class FTMOBacktester:
         if len(daily_returns) > 0 and daily_returns.std() > 0:
             result.sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
 
-        # Max drawdown
-        peak = result.equity_curve.cummax()
-        drawdown = (result.equity_curve - peak) / peak
-        result.max_drawdown = abs(drawdown.min())
+        # FTMO total drawdown: lowest equity relative to initial balance
+        min_equity = result.equity_curve.min()
+        result.max_drawdown = max(0, (self.initial_balance - min_equity) / self.initial_balance)
 
-        # Max daily drawdown
+        # FTMO daily drawdown: worst day loss as pct of that day's start balance
         if daily_balances:
             daily_pnl = pd.Series(daily_balances)
             result.daily_pnl = daily_pnl
-            # Calculate daily DD as pct of day-start balance
-            result.max_daily_drawdown = abs(daily_pnl.min()) / self.initial_balance
+            running_balance = self.initial_balance
+            worst_daily_dd_pct = 0.0
+            for d in sorted(daily_balances.keys()):
+                day_start = running_balance
+                day_pnl = daily_balances[d]
+                if day_start > 0 and day_pnl < 0:
+                    dd_pct = abs(day_pnl) / day_start
+                    worst_daily_dd_pct = max(worst_daily_dd_pct, dd_pct)
+                running_balance += day_pnl
+            result.max_daily_drawdown = worst_daily_dd_pct
 
         # Win rate and profit factor
         if trades:

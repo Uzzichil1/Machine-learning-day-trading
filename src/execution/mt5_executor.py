@@ -25,6 +25,27 @@ class MT5Executor:
         }
         return modes.get(mode, mt5.ORDER_FILLING_IOC)
 
+    def normalize_lots(self, symbol: str, lots: float) -> float:
+        """Normalize lot size to broker's volume constraints."""
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            return lots
+        step = info.volume_step
+        lots = round(round(lots / step) * step, 8)
+        lots = max(info.volume_min, min(lots, info.volume_max))
+        return lots
+
+    def get_volume_constraints(self, symbol: str) -> dict:
+        """Get broker's volume constraints for a symbol."""
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            return {"volume_min": 0.1, "volume_max": 250.0, "volume_step": 0.1}
+        return {
+            "volume_min": info.volume_min,
+            "volume_max": info.volume_max,
+            "volume_step": info.volume_step,
+        }
+
     def open_trade(
         self,
         symbol: str,
@@ -47,6 +68,9 @@ class MT5Executor:
         Returns:
             dict with order result or error info
         """
+        # Normalize lots to broker constraints
+        lots = self.normalize_lots(symbol, lots)
+
         tick = mt5.symbol_info_tick(symbol)
         if tick is None:
             return {"success": False, "error": f"Cannot get tick for {symbol}"}

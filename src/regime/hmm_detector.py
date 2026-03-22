@@ -9,6 +9,7 @@ hmmlearn dependency that is incompatible with Python 3.14+.
 
 import logging
 
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.mixture import GaussianMixture
@@ -149,3 +150,19 @@ class RegimeDetector:
             "high_vol_chaos": 0.0,
         }).fillna(0.0)
         return scalars
+
+    def save(self, path: str) -> None:
+        """Save fitted GMM model and state mapping."""
+        joblib.dump(
+            {"model": self.model, "state_mapping": self._state_mapping, "fitted": self._fitted},
+            path,
+        )
+        logger.info("RegimeDetector saved to %s", path)
+
+    def load(self, path: str) -> None:
+        """Load a previously fitted GMM model."""
+        data = joblib.load(path)
+        self.model = data["model"]
+        self._state_mapping = data["state_mapping"]
+        self._fitted = data["fitted"]
+        logger.info("RegimeDetector loaded from %s", path)

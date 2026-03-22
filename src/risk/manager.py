@@ -56,9 +56,9 @@ class RiskManager:
         """Update risk state from live account info."""
         today = date.today()
 
-        # New day reset
+        # New day reset — FTMO uses actual balance at start of day, not peak
         if today != self.state.current_date:
-            self.state.day_start_balance = max(balance, self.state.current_balance)
+            self.state.day_start_balance = balance
             self.state.current_date = today
             self.state.trades_today = 0
             self.state.daily_pnl = 0.0
@@ -107,7 +107,8 @@ class RiskManager:
         return True, "OK"
 
     def calculate_position_size(
-        self, trade: TradeRequest, pip_value: float
+        self, trade: TradeRequest, pip_value: float,
+        volume_min: float = 0.1, volume_max: float = 250.0, volume_step: float = 0.1,
     ) -> tuple[float, float, float]:
         """Calculate lot size, SL price, and TP price.
 
@@ -115,7 +116,7 @@ class RiskManager:
             (lots, stop_loss_distance, take_profit_distance)
         """
         # Scale risk by confidence and regime
-        confidence_scalar = max(0.5, min(1.0, trade.confidence))
+        confidence_scalar = max(0.7, min(1.0, trade.confidence))
         regime_scalar = max(0.0, min(1.0, trade.regime_scalar))
 
         effective_risk = self.risk_per_trade * confidence_scalar * regime_scalar
@@ -138,9 +139,10 @@ class RiskManager:
 
         lots = risk_amount / (stop_distance * pip_value)
 
-        # Round to 2 decimal places (standard lot precision)
-        lots = round(lots, 2)
-        lots = max(lots, 0.01)  # Minimum lot size
+        # Round to broker's volume step and clamp to min/max
+        lots = round(round(lots / volume_step) * volume_step, 8)
+        lots = max(lots, volume_min)
+        lots = min(lots, volume_max)
 
         logger.info(
             f"Position size: {lots} lots | "

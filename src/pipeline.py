@@ -167,6 +167,10 @@ class MLPipeline:
         val_preds = (val_proba >= 0.5).astype(int)
         val_acc = (val_preds == y_val).mean()
 
+        # Calibrate median_proba from validation set (NOT test set — prevents leakage)
+        self.ensemble._median_proba = float(np.median(val_proba))
+        logger.info(f"Calibrated median_proba from validation set: {self.ensemble._median_proba:.4f}")
+
         # Evaluate on test (OOS)
         test_proba = self.ensemble.predict_proba(X_test)
         test_preds = (test_proba >= 0.5).astype(int)
@@ -182,17 +186,22 @@ class MLPipeline:
         for feat, imp in top_features[:10]:
             logger.info(f"  {feat}: {imp}")
 
-        # Save model
+        # Save model (includes median_proba)
         save_path = os.path.join(self.model_dir, f"{symbol}_ensemble.joblib")
         self.ensemble.save(save_path)
 
-        # Train regime detector on H4 data
+        # Train regime detector on TRAINING-PERIOD H4 data only (no future leakage)
         h4_data = self.connector.load_data(
             symbol, self.config["timeframes"]["regime"], self.data_dir
         )
         if not h4_data.empty:
-            self.regime.fit(h4_data)
-            logger.info("Regime detector fitted on H4 data")
+            # Use same temporal split ratio for H4 as H1
+            h4_train_end = int(len(h4_data) * train_pct)
+            h4_train = h4_data.iloc[:h4_train_end]
+            self.regime.fit(h4_train)
+            regime_path = os.path.join(self.model_dir, f"{symbol}_regime.joblib")
+            self.regime.save(regime_path)
+            logger.info(f"Regime detector fitted on training H4 data only ({len(h4_train)}/{len(h4_data)} bars)")
 
         # ── GENERATE TRAINING VISUALS ──
         sym_report_dir = os.path.join(self.report_dir, symbol)
@@ -263,53 +272,51 @@ class MLPipeline:
         # Generate signals
         probas = self.ensemble.predict_proba(X_test)
 
-        # Integrate regime detection for position sizing
+        # Load saved regime detector (fitted on training data only)
         regime_scalars = np.ones(len(test_df))
+        regime_path = os.path.join(self.model_dir, f"{symbol}_regime.joblib")
         h4_data = self.connector.load_data(
             symbol, self.config["timeframes"]["regime"], self.data_dir
         )
-        if not h4_data.empty and self.regime._fitted:
+        if os.path.exists(regime_path) and not h4_data.empty:
             try:
+                self.regime.load(regime_path)
                 h4_scalars = self.regime.get_size_scalar(h4_data)
-                # Map H4 regime scalars to H1 bars (forward-fill)
                 h4_scalars.index = h4_scalars.index.tz_localize(None) if h4_scalars.index.tz else h4_scalars.index
                 test_idx = test_df.index.tz_localize(None) if test_df.index.tz else test_df.index
                 regime_reindexed = h4_scalars.reindex(test_idx, method="ffill").fillna(1.0)
                 regime_scalars = regime_reindexed.values
-                logger.info("Regime scalars integrated into backtest")
+                logger.info("Regime scalars integrated (model fitted on training data only)")
             except Exception as e:
                 logger.warning(f"Regime integration failed: {e}")
 
-        # Build signal DataFrame — use median-centered thresholds to fix directional bias
+        # Build signal DataFrame — use validation-calibrated median (no test set leakage)
+        risk_cfg = self.config.get("risk", {})
         signals = pd.DataFrame(index=test_df.index)
         signals["confidence"] = probas
         signals["signal"] = 0
-        median_proba = np.median(probas)
+        median_proba = self.ensemble._median_proba  # From validation set, not test
         signal_offset = risk_cfg.get("signal_offset", 0.02)
         buy_thresh = median_proba + signal_offset
         sell_thresh = median_proba - signal_offset
         signals.loc[probas >= buy_thresh, "signal"] = 1
         signals.loc[probas <= sell_thresh, "signal"] = -1
-        # Confidence is distance from median, normalized
         signals["confidence"] = np.where(
             signals["signal"] == 1,
-            (probas - median_proba) / (1 - median_proba),  # Scale buy confidence 0-1
+            (probas - median_proba) / (1 - median_proba),
             np.where(
                 signals["signal"] == -1,
-                (median_proba - probas) / median_proba,  # Scale sell confidence 0-1
+                (median_proba - probas) / median_proba,
                 0.5
             )
-        ).clip(0.3, 1.0)
-        logger.info(f"Probability stats: median={median_proba:.4f} | buy_thresh={buy_thresh:.4f} | sell_thresh={sell_thresh:.4f}")
+        ).clip(0.5, 1.0)
+        logger.info(f"Probability stats: median={median_proba:.4f} (from validation) | buy_thresh={buy_thresh:.4f} | sell_thresh={sell_thresh:.4f}")
         signals["atr"] = test_df["atr"].values
         signals["regime_scalar"] = regime_scalars
         signals["symbol"] = symbol
 
         signal_count = (signals["signal"] != 0).sum()
         logger.info(f"Generated {signal_count} signals ({(signals['signal']==1).sum()} buy, {(signals['signal']==-1).sum()} sell)")
-
-        # Run backtest
-        risk_cfg = self.config.get("risk", {})
         result = self.backtester.run(
             signals, test_df,
             risk_per_trade=risk_cfg.get("risk_per_trade_pct", 0.25) / 100,

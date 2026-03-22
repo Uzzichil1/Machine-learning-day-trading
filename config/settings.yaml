@@ -13,18 +13,19 @@ ftmo_limits:
   max_total_loss_pct: 10.0
   best_day_max_pct: 50.0  # Best day cannot exceed 50% of total positive days' profit
 
-# ── Internal Risk Controls (with safety buffer) ──
+# ── Internal Risk Controls (aggressive for 14-day challenge pass) ──
+# Walk-forward validated: USTEC 64% pass rate, avg 5 days to target when passing
 risk:
-  risk_per_trade_pct: 0.40        # Optimized: grid search winner (was 0.25)
-  max_risk_per_trade_pct: 0.50    # Hard cap per trade
-  max_open_risk_pct: 1.2          # Total risk across all open positions
-  daily_loss_halt_pct: 3.0        # Halt trading for day (buffer before FTMO 5%)
-  total_drawdown_halt_pct: 8.0    # Halt all trading (buffer before FTMO 10%)
-  max_concurrent_trades: 3
-  max_trades_per_day: 8
+  risk_per_trade_pct: 1.75        # Aggressive: ~17% Kelly (edge=0.169R, Kelly=10.1%)
+  max_risk_per_trade_pct: 2.00    # Hard cap per trade
+  max_open_risk_pct: 3.5          # Total risk across all open positions
+  daily_loss_halt_pct: 3.5        # Halt trading for day (1.5% buffer — 4.67% DD observed in backtest)
+  total_drawdown_halt_pct: 9.0    # Halt all trading (1% buffer before FTMO 10%)
+  max_concurrent_trades: 5
+  max_trades_per_day: 15
   stop_loss_atr_multiple: 1.5     # SL distance = 1.5 * ATR(14)
-  take_profit_atr_multiple: 2.50  # Optimized: 1.67R (was 2.25/1.5R)
-  signal_offset: 0.02             # Median +/- offset for signal thresholds
+  take_profit_atr_multiple: 2.50  # 1.67R reward-to-risk
+  signal_offset: 0.01             # Sweet spot: good signal quality with high frequency (was 0.02)
 
 # ── Instruments ──
 instruments:
@@ -34,15 +35,15 @@ instruments:
     pip_value: 10.0         # Per standard lot
     min_volume: 0.01
   - symbol: "XAUUSD"
-    enabled: true
+    enabled: false  # Disabled — walk-forward shows 24% pass rate (11/17 folds blow up)
     session_utc: [8, 21]
     pip_value: 1.0
     min_volume: 0.01
   - symbol: "USTEC"
     enabled: true
     session_utc: [13, 21]  # US session only
-    pip_value: 1.0
-    min_volume: 0.01
+    pip_value: 1.0          # $1 per 1 price unit per lot (verified from MT5: tick_value/tick_size)
+    min_volume: 0.1         # MetaQuotes-Demo min lot for USTEC
 
 # ── Timeframes ──
 timeframes:

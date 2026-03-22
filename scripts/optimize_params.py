@@ -23,8 +23,13 @@ logging.basicConfig(level=logging.WARNING)
 config = load_config()
 
 
-def prepare_test_data(symbol: str):
-    """Prepare OOS test data and trained model for a symbol."""
+def prepare_data(symbol: str, use_validation: bool = True):
+    """Prepare data and trained model for a symbol.
+
+    Args:
+        use_validation: If True, return VALIDATION set (for grid search).
+                       If False, return TEST set (for final evaluation).
+    """
     connector = MT5Connector()
     feature_eng = FeatureEngineer(config.get("features", {}))
 
@@ -33,7 +38,7 @@ def prepare_test_data(symbol: str):
     df = connector.load_data(symbol, tf, data_dir)
 
     if df.empty:
-        return None, None, None, None
+        return None, None, None, None, None
 
     df = feature_eng.compute_all(df)
 
@@ -55,42 +60,46 @@ def prepare_test_data(symbol: str):
     train_end = int(n * data_cfg.get("train_pct", 0.6))
     val_end = int(n * (data_cfg.get("train_pct", 0.6) + data_cfg.get("validation_pct", 0.2)))
 
-    test_df = df.iloc[val_end:]
-    X_test = test_df[feature_cols].values
+    if use_validation:
+        eval_df = df.iloc[train_end:val_end]  # VALIDATION set for grid search
+    else:
+        eval_df = df.iloc[val_end:]  # TEST set for final evaluation
+
+    X_eval = eval_df[feature_cols].values
 
     # Load trained model
     ensemble = StackingEnsemble(config.get("model", {}))
     model_path = os.path.join(str(PROJECT_ROOT / "models" / "saved"), f"{symbol}_ensemble.joblib")
     ensemble.load(model_path)
 
-    probas = ensemble.predict_proba(X_test)
+    probas = ensemble.predict_proba(X_eval)
 
-    # Regime detection
-    regime_scalars = np.ones(len(test_df))
+    # Load saved regime detector (fitted on training data only)
+    regime_scalars = np.ones(len(eval_df))
+    regime_path = os.path.join(str(PROJECT_ROOT / "models" / "saved"), f"{symbol}_regime.joblib")
     h4_data = connector.load_data(symbol, config["timeframes"]["regime"], data_dir)
-    if not h4_data.empty:
+    if os.path.exists(regime_path) and not h4_data.empty:
         regime = RegimeDetector(n_states=3)
-        regime.fit(h4_data)
-        if regime._fitted:
-            try:
-                h4_scalars = regime.get_size_scalar(h4_data)
-                h4_scalars.index = h4_scalars.index.tz_localize(None) if h4_scalars.index.tz else h4_scalars.index
-                test_idx = test_df.index.tz_localize(None) if test_df.index.tz else test_df.index
-                regime_reindexed = h4_scalars.reindex(test_idx, method="ffill").fillna(1.0)
-                regime_scalars = regime_reindexed.values
-            except Exception:
-                pass
+        regime.load(regime_path)
+        try:
+            h4_scalars = regime.get_size_scalar(h4_data)
+            h4_scalars.index = h4_scalars.index.tz_localize(None) if h4_scalars.index.tz else h4_scalars.index
+            eval_idx = eval_df.index.tz_localize(None) if eval_df.index.tz else eval_df.index
+            regime_reindexed = h4_scalars.reindex(eval_idx, method="ffill").fillna(1.0)
+            regime_scalars = regime_reindexed.values
+        except Exception:
+            pass
 
-    return test_df, probas, regime_scalars, feature_cols
+    return eval_df, probas, regime_scalars, feature_cols, ensemble
 
 
 def run_backtest_with_params(
     test_df, probas, regime_scalars, symbol,
-    risk_pct, sl_atr_mult, tp_atr_mult, signal_offset
+    risk_pct, sl_atr_mult, tp_atr_mult, signal_offset,
+    median_proba=0.5,
 ):
     """Run a single backtest with given parameters."""
     signals = pd.DataFrame(index=test_df.index)
-    median_proba = np.median(probas)
     buy_thresh = median_proba + signal_offset
     sell_thresh = median_proba - signal_offset
 
@@ -143,22 +152,23 @@ def main():
 
     for symbol in symbols:
         print(f"\n{'='*70}")
-        print(f"OPTIMIZING: {symbol}")
+        print(f"OPTIMIZING ON VALIDATION SET: {symbol}")
         print(f"{'='*70}")
 
-        data = prepare_test_data(symbol)
-        test_df, probas, regime_scalars, feature_cols = data
+        # Grid search on VALIDATION set (not test set — prevents overfitting)
+        val_data = prepare_data(symbol, use_validation=True)
+        val_df, val_probas, val_regime_scalars, feature_cols, ensemble = val_data
 
-        if test_df is None:
+        if val_df is None:
             print(f"  No data for {symbol}, skipping")
             continue
 
-        print(f"  Test samples: {len(test_df)}")
-        print(f"  Probability range: [{probas.min():.4f}, {probas.max():.4f}]")
-        print(f"  Probability median: {np.median(probas):.4f}")
+        print(f"  Validation samples: {len(val_df)}")
+        print(f"  Probability range: [{val_probas.min():.4f}, {val_probas.max():.4f}]")
+        print(f"  Model median_proba (from val calibration): {ensemble._median_proba:.4f}")
 
         total_combos = len(risk_pcts) * len(sl_atr_mults) * len(tp_atr_mults) * len(signal_offsets)
-        print(f"  Running {total_combos} parameter combinations...")
+        print(f"  Running {total_combos} parameter combinations on validation set...")
 
         combo_num = 0
         for risk_pct, sl_mult, tp_mult, sig_off in itertools.product(
@@ -173,8 +183,9 @@ def main():
                 continue
 
             result = run_backtest_with_params(
-                test_df, probas, regime_scalars, symbol,
+                val_df, val_probas, val_regime_scalars, symbol,
                 risk_pct, sl_mult, tp_mult, sig_off,
+                median_proba=ensemble._median_proba,
             )
 
             results.append({
