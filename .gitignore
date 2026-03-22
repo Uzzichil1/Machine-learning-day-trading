@@ -1,0 +1,48 @@
+# Data files (too large for git)
+data/raw/*.parquet
+data/raw/*.csv
+
+# Saved models (binary, large)
+models/saved/*.joblib
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Reports (generated, can be recreated)
+reports/*.html
+reports/*/*.html
+reports/*.csv
+
+# Streamlit
+.streamlit/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# CatBoost training cache
+catboost_info/
