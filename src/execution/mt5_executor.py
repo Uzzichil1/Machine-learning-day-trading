@@ -46,6 +46,35 @@ class MT5Executor:
             "volume_step": info.volume_step,
         }
 
+    def preflight_check(self, symbol: str) -> tuple[bool, str]:
+        """Verify symbol and account are ready for trading.
+
+        Returns (ok, reason).
+        """
+        # Ensure symbol is in Market Watch
+        if not mt5.symbol_select(symbol, True):
+            return False, f"Cannot select {symbol} in Market Watch"
+
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            return False, f"symbol_info returned None for {symbol}"
+
+        # trade_mode: 0 = FULL, 1 = LONGONLY, 2 = SHORTONLY, 3 = CLOSEONLY, 4 = DISABLED
+        if info.trade_mode == mt5.SYMBOL_TRADE_MODE_DISABLED:
+            return False, f"{symbol} trade_mode is DISABLED on this broker/account"
+        if info.trade_mode == mt5.SYMBOL_TRADE_MODE_CLOSEONLY:
+            return False, f"{symbol} trade_mode is CLOSE_ONLY — no new positions allowed"
+
+        # Check account-level trading permissions
+        account = mt5.account_info()
+        if account is not None:
+            if not account.trade_allowed:
+                return False, "Account trade_allowed is False — trading disabled on this account"
+            if not account.trade_expert:
+                return False, "Account trade_expert is False — enable 'Allow Algo Trading' in MT5"
+
+        return True, "OK"
+
     def open_trade(
         self,
         symbol: str,
@@ -68,6 +97,19 @@ class MT5Executor:
         Returns:
             dict with order result or error info
         """
+        # Pre-flight: ensure symbol selected and tradeable
+        ok, reason = self.preflight_check(symbol)
+        if not ok:
+            logger.error(f"Preflight failed for {symbol}: {reason}")
+            return {"success": False, "error": reason}
+
+        # Check direction-specific trade mode
+        info = mt5.symbol_info(symbol)
+        if direction == 1 and info.trade_mode == mt5.SYMBOL_TRADE_MODE_SHORTONLY:
+            return {"success": False, "error": f"{symbol} is SHORT_ONLY — cannot open BUY"}
+        if direction == -1 and info.trade_mode == mt5.SYMBOL_TRADE_MODE_LONGONLY:
+            return {"success": False, "error": f"{symbol} is LONG_ONLY — cannot open SELL"}
+
         # Normalize lots to broker constraints
         lots = self.normalize_lots(symbol, lots)
 

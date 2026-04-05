@@ -1,0 +1,180 @@
+Loading data for USTEC...
+Total samples: 18039, Range: 2022-07-19 to 2026-03-20
+USTEC offset: 18039 samples from 2022-07-19
+
+  Fold 1: test 2023-04-26 to 2023-07-06
+    Baseline:  +115.46% | Trades= 574 | WR=47.7% | PASS
+    Optimized: +465.60% | Trades= 798 | WR=44.1% | PASS
+
+  Fold 2: test 2023-07-06 to 2023-09-14
+    Baseline:  +143.97% | Trades= 515 | WR=50.5% | PASS
+    Optimized: +243.93% | Trades= 630 | WR=47.5% | PASS
+
+  Fold 3: test 2023-09-14 to 2023-11-23
+    Baseline:    -9.40% | Trades=  12 | WR=25.0% | BLOW
+    Optimized:   -2.81% | Trades=   3 | WR=0.0% | KILL [BLOW->KILL]
+
+  Fold 4: test 2023-11-23 to 2024-02-02
+    Baseline:  +135.56% | Trades= 487 | WR=51.7% | PASS
+    Optimized: +308.38% | Trades= 590 | WR=48.8% | PASS
+
+  Fold 5: test 2024-02-02 to 2024-04-16
+    Baseline:   +77.23% | Trades= 376 | WR=49.5% | PASS
+    Optimized: +185.13% | Trades= 472 | WR=45.3% | PASS
+
+  Fold 6: test 2024-04-16 to 2024-06-26
+    Baseline:   +80.09% | Trades= 418 | WR=47.8% | PASS
+    Optimized: +171.64% | Trades= 475 | WR=47.8% | PASS
+
+  Fold 7: test 2024-06-26 to 2024-09-03
+    Baseline:   +26.85% | Trades= 447 | WR=39.6% | PASS
+    Optimized: +116.92% | Trades= 597 | WR=36.9% | PASS
+
+  Fold 8: test 2024-09-03 to 2024-11-20
+    Baseline:  +454.26% | Trades= 508 | WR=49.8% | PASS
+    Optimized: +855.71% | Trades= 628 | WR=47.9% | PASS
+
+  Fold 9: test 2024-11-20 to 2025-02-10
+    Baseline:   +39.77% | Trades= 467 | WR=37.7% | PASS
+    Optimized: +143.12% | Trades= 585 | WR=36.9% | PASS
+
+  Fold 10: test 2025-02-10 to 2025-04-21
+    Baseline:    -9.10% | Trades=  10 | WR=10.0% | BLOW
+    Optimized:   -2.81% | Trades=   3 | WR=0.0% | KILL [BLOW->KILL]
+
+  Fold 11: test 2025-04-21 to 2025-06-27
+    Baseline:    -9.75% | Trades=  16 | WR=6.2% | BLOW
+    Optimized:   -9.01% | Trades=  67 | WR=10.4% | BLOW
+
+  Fold 12: test 2025-06-27 to 2025-10-29
+    Baseline:   +86.44% | Trades= 248 | WR=52.0% | PASS
+    Optimized: +141.52% | Trades= 306 | WR=49.7% | PASS
+
+  Fold 13: test 2025-10-29 to 2026-01-09
+    Baseline:    -9.22% | Trades= 189 | WR=43.4% | BLOW
+    Optimized:   -1.56% | Trades=   3 | WR=33.3% | KILL [BLOW->KILL]
+
+  Fold 14: test 2026-01-09 to 2026-03-18
+    Baseline:  +101.41% | Trades= 392 | WR=50.8% | PASS
+    Optimized: +294.48% | Trades= 490 | WR=50.0% | PASS
+
+===========================================================================
+WALK-FORWARD VALIDATION: BASELINE vs OPTIMIZED
+===========================================================================
+
+  Metric                             Baseline    Optimized      Delta
+  -----------------------------------------------------------------
+  Pass Rate                      10/14 (71%)10/14 (71%):>12       +0
+
+  Metric                              Baseline          Optimized        Delta
+  ---------------------------------------------------------------------------
+  Pass Rate                        10/14 (71%)        10/14 (71%)     +0 folds
+  Blow Rate                         4/14 (29%)          1/14 (7%)     -3 folds
+  Killed Early                             N/A               3/14             
+  Mean Return                           87.40%            207.88%     +120.48%
+  Median Return                         78.66%            157.38%             
+  Mean Win Rate                          40.1%              35.6%             
+  Mean Sharpe                             1.93               4.24             
+  Mean Max DD                            2.68%              1.16%             
+  Best Day Violations                        1                  1             
+
+  PER-FOLD DETAIL:
+  Fold   Baseline B-Status  Optimized O-Status       Change
+  ------------------------------------------------------------
+     1  +115.46%     PASS  +465.60%     PASS             
+     2  +143.97%     PASS  +243.93%     PASS             
+     3    -9.40%     BLOW    -2.81%     KILL   BLOW->KILL
+     4  +135.56%     PASS  +308.38%     PASS             
+     5   +77.23%     PASS  +185.13%     PASS             
+     6   +80.09%     PASS  +171.64%     PASS             
+     7   +26.85%     PASS  +116.92%     PASS             
+     8  +454.26%     PASS  +855.71%     PASS             
+     9   +39.77%     PASS  +143.12%     PASS             
+    10    -9.10%     BLOW    -2.81%     KILL   BLOW->KILL
+    11    -9.75%     BLOW    -9.01%     BLOW             
+    12   +86.44%     PASS  +141.52%     PASS             
+    13    -9.22%     BLOW    -1.56%     KILL   BLOW->KILL
+    14  +101.41%     PASS  +294.48%     PASS             
+
+===========================================================================
+STATISTICAL TEST: Is Optimized Better Than Baseline?
+===========================================================================
+  Paired differences (optimized - baseline):
+    Mean: +1.2048 (+120.48%)
+    Median: +0.9576
+    Positive: 14/14
+
+  Wilcoxon signed-rank (H1: optimized > baseline):
+    W-statistic: 105.0
+    p-value: 0.0001
+    SIGNIFICANT at alpha=0.05
+
+  Paired t-test (H1: optimized > baseline):
+    t-statistic: 3.6372
+    p-value (one-sided): 0.0015
+    SIGNIFICANT at alpha=0.05
+
+  McNemar's test (pass/fail concordance):
+    Baseline pass, Optimized fail: 0
+    Baseline fail, Optimized pass: 0
+
+===========================================================================
+KILL SWITCH ANALYSIS
+===========================================================================
+  Killed folds: 3
+    Fold 3: Killed at -2.81% | Baseline would have been: BLOW at -9.40% | Saved: 6.59%
+    Fold 10: Killed at -2.81% | Baseline would have been: BLOW at -9.10% | Saved: 6.29%
+    Fold 13: Killed at -1.56% | Baseline would have been: BLOW at -9.22% | Saved: 7.66%
+
+  Kill switch accuracy:
+    True positives (killed bad folds): 3
+    False positives (killed good folds): 0
+    Precision: 100%
+
+===========================================================================
+EXPECTED VALUE COMPARISON
+===========================================================================
+
+  Baseline:
+    Pass rate: 71%
+    E[profit|pass]: $126,106
+    FTMO EV per attempt: $+89,575
+    Expected attempts to pass: 1.4
+    P(pass within 3 attempts): 97.7%
+
+  Optimized:
+    Pass rate: 71%
+    E[profit|pass]: $292,644
+    FTMO EV per attempt: $+208,531
+    Expected attempts to pass: 1.4
+    P(pass within 3 attempts): 97.7%
+
+===========================================================================
+WORST-CASE ANALYSIS (Optimized)
+===========================================================================
+  Worst fold return: -9.01%
+  Max drawdown across all folds: 9.01%
+  Worst daily drawdown: 9.01%
+  Max consecutive non-pass folds: 2
+  Average cost per failure: $4,546 (loss + fee)
+  Worst failure cost: $9,509
+
+  Results saved to: C:\Users\27795\Desktop\final attempt ML\reports\validation_optimized.csv
+
+===========================================================================
+VALIDATION VERDICT
+===========================================================================
+  Optimized strategy maintains pass rate (but reduces blow rate)
+  Blow rate REDUCED from 4 to 1 folds
+  Kill switch: PERFECT precision — 3 kills, 0 false positives
+
+  RECOMMENDED CONFIG FOR LIVE TRADING:
+    risk_per_trade_pct: 2.50
+    kill_switch_n: 3
+    kill_switch_thresh_pct: -1.0
+    streak_scale: true
+    streak_loss_count: 2
+    streak_scale_factor: 0.25
+    signal_offset: 0.01
+    stop_loss_atr_multiple: 1.5
+    take_profit_atr_multiple: 2.5

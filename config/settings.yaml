@@ -13,19 +13,33 @@ ftmo_limits:
   max_total_loss_pct: 10.0
   best_day_max_pct: 50.0  # Best day cannot exceed 50% of total positive days' profit
 
-# ── Internal Risk Controls (aggressive for 14-day challenge pass) ──
-# Walk-forward validated: USTEC 64% pass rate, avg 5 days to target when passing
+# ── Internal Risk Controls (optimized + validated 2026-03-30) ──
+# Walk-forward validated: USTEC 71% pass rate (10/14), 7% blow rate (1/14)
+# Optimization: kill switch + streak scaling + increased risk (Phase 3-4)
+# Statistical significance: Wilcoxon p=0.0001, paired t-test p=0.0017
 risk:
-  risk_per_trade_pct: 1.75        # Aggressive: ~17% Kelly (edge=0.169R, Kelly=10.1%)
-  max_risk_per_trade_pct: 2.00    # Hard cap per trade
-  max_open_risk_pct: 3.5          # Total risk across all open positions
-  daily_loss_halt_pct: 3.5        # Halt trading for day (1.5% buffer — 4.67% DD observed in backtest)
+  risk_per_trade_pct: 2.50        # Optimized: higher risk + kill switch for first-passage
+  max_risk_per_trade_pct: 3.00    # Hard cap per trade
+  max_open_risk_pct: 5.0          # Total risk across all open positions
+  daily_loss_halt_pct: 3.5        # Halt trading for day (1.5% buffer below FTMO 5%)
   total_drawdown_halt_pct: 9.0    # Halt all trading (1% buffer before FTMO 10%)
   max_concurrent_trades: 5
   max_trades_per_day: 15
   stop_loss_atr_multiple: 1.5     # SL distance = 1.5 * ATR(14)
   take_profit_atr_multiple: 2.50  # 1.67R reward-to-risk
-  signal_offset: 0.01             # Sweet spot: good signal quality with high frequency (was 0.02)
+  signal_offset: 0.01             # Probability threshold offset from median
+
+  # Kill switch: halt trading if first N trades lose > threshold
+  # Validated: 100% precision — caught 3/4 blowups, 0 false positives
+  kill_switch_enabled: true
+  kill_switch_n_trades: 3          # Check after this many trades
+  kill_switch_thresh_pct: -1.0     # Halt if cumulative PnL < this %
+
+  # Streak scaling: reduce size after consecutive losses
+  # Justified by trade autocorrelation +0.40 (losses cluster)
+  streak_scale_enabled: true
+  streak_loss_count: 2             # After N consecutive losses...
+  streak_scale_factor: 0.25        # ...reduce risk to this fraction
 
 # ── Instruments ──
 instruments:
@@ -39,11 +53,12 @@ instruments:
     session_utc: [8, 21]
     pip_value: 1.0
     min_volume: 0.01
-  - symbol: "USTEC"
+  - symbol: "US100.cash"
+    model_symbol: "USTEC"   # Model files are saved under USTEC (MetaQuotes name)
     enabled: true
     session_utc: [13, 21]  # US session only
-    pip_value: 1.0          # $1 per 1 price unit per lot (verified from MT5: tick_value/tick_size)
-    min_volume: 0.1         # MetaQuotes-Demo min lot for USTEC
+    pip_value: 1.0          # $1 per 1 price unit per lot (verified from FTMO: tick_value/tick_size)
+    min_volume: 0.01        # FTMO-Demo min lot for US100.cash
 
 # ── Timeframes ──
 timeframes:
@@ -96,6 +111,12 @@ data:
   train_pct: 0.60
   validation_pct: 0.20
   test_pct: 0.20                 # Deep OOS, touched once
+
+# ── MT5 Connection ──
+mt5:
+  login: 1512936231
+  password: "lubQ!1rL3m3"
+  server: "FTMO-Demo"
 
 # ── Execution ──
 execution:

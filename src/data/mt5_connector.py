@@ -25,16 +25,28 @@ TIMEFRAME_MAP = {
 class MT5Connector:
     """Manages MT5 terminal connection and data operations."""
 
-    def __init__(self):
+    def __init__(self, mt5_config: dict = None):
         self._connected = False
+        self._mt5_config = mt5_config or {}
 
     def connect(self) -> bool:
-        if not mt5.initialize():
+        kwargs = {}
+        if self._mt5_config.get("login"):
+            kwargs["login"] = int(self._mt5_config["login"])
+        if self._mt5_config.get("password"):
+            kwargs["password"] = str(self._mt5_config["password"])
+        if self._mt5_config.get("server"):
+            kwargs["server"] = str(self._mt5_config["server"])
+
+        if not mt5.initialize(**kwargs):
             logger.error(f"MT5 initialize failed: {mt5.last_error()}")
             return False
         self._connected = True
         info = mt5.terminal_info()
+        acc = mt5.account_info()
         logger.info(f"Connected to MT5: {info.name}, build {info.build}")
+        if acc:
+            logger.info(f"Account: {acc.login} on {acc.server} (balance: ${acc.balance:,.2f})")
         return True
 
     def disconnect(self):

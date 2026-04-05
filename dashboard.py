@@ -22,6 +22,12 @@ from src.features.labeler import triple_barrier_labels
 from src.models.ensemble import StackingEnsemble
 from src.regime.hmm_detector import RegimeDetector
 from src.backtest.engine import FTMOBacktester
+from src.visualization.ml_insights import (
+    plot_calibration_curve, plot_fold_comparison, plot_fold_scatter,
+    plot_regime_performance, plot_confidence_analysis, plot_feature_stability,
+    plot_drawdown_paths, plot_live_vs_backtest, compute_wf_summary,
+    plot_wf_summary_card, winner_vs_blowup_stats,
+)
 
 # ── Page Config ──────────────────────────────────────────────────────
 
@@ -79,15 +85,25 @@ def load_config():
         return yaml.safe_load(f)
 
 
+def _get_model_symbol(symbol: str, config: dict) -> str:
+    """Resolve broker symbol to model file symbol (e.g. US100.cash -> USTEC)."""
+    for instr in config.get("instruments", []):
+        if instr["symbol"] == symbol:
+            return instr.get("model_symbol", symbol)
+    return symbol
+
+
 @st.cache_data(ttl=60)
 def load_backtest_result(symbol: str, config: dict):
     """Load data and run backtest for a symbol (cached)."""
+    model_symbol = _get_model_symbol(symbol, config)
     connector = MT5Connector()
     feature_eng = FeatureEngineer(config.get("features", {}))
     data_dir = str(PROJECT_ROOT / "data" / "raw")
 
     tf = config["timeframes"]["signal"]
-    df = connector.load_data(symbol, tf, data_dir)
+    # Load data using model_symbol (data files are saved under original name)
+    df = connector.load_data(model_symbol, tf, data_dir)
     if df.empty:
         return None
 
@@ -112,7 +128,7 @@ def load_backtest_result(symbol: str, config: dict):
     X_test = test_df[feature_cols].values
 
     ensemble = StackingEnsemble(config.get("model", {}))
-    model_path = str(PROJECT_ROOT / "models" / "saved" / f"{symbol}_ensemble.joblib")
+    model_path = str(PROJECT_ROOT / "models" / "saved" / f"{model_symbol}_ensemble.joblib")
     if not os.path.exists(model_path):
         return None
     ensemble.load(model_path)
@@ -227,7 +243,7 @@ st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
     "Navigation",
-    ["Dashboard", "Backtest Results", "Model Analysis", "Configuration", "Live Trading"],
+    ["Dashboard", "Backtest Results", "Model Analysis", "ML Insights", "Configuration", "Live Trading"],
     index=0,
 )
 
@@ -570,6 +586,172 @@ elif page == "Model Analysis":
         st.plotly_chart(fig, use_container_width=True)
 
 
+# ── PAGE: ML INSIGHTS ────────────────────────────────────────────────
+
+elif page == "ML Insights":
+    st.title("ML Insights & Diagnostics")
+    st.markdown("Deep analysis of model behavior, walk-forward validation, and regime sensitivity.")
+
+    # ── Load walk-forward results ──
+    wf_path = PROJECT_ROOT / "reports" / "walk_forward_results.csv"
+    if wf_path.exists():
+        wf_all = pd.read_csv(wf_path)
+
+        # Split into XAUUSD (first 17 folds) and USTEC (last 14 folds)
+        wf_xauusd = wf_all.iloc[:17].reset_index(drop=True)
+        wf_ustec = wf_all.iloc[17:].reset_index(drop=True)
+
+        # ── Summary Card ──
+        st.markdown('<div class="section-header">Walk-Forward Summary — USTEC</div>', unsafe_allow_html=True)
+        summary = compute_wf_summary(wf_ustec)
+
+        cols = st.columns(4)
+        cols[0].metric("Pass Rate", f"{summary['pass_rate']:.0%}",
+                       delta=f"{summary['pass_count']}/{summary['total_folds']} folds")
+        cols[1].metric("Blow Rate", f"{summary['blow_rate']:.0%}",
+                       delta=f"{summary['blow_count']} blowups", delta_color="inverse")
+        cols[2].metric("E[V] per Attempt", f"${summary['expected_value']:+,.0f}")
+        cols[3].metric("Avg Days to Target", f"{summary['days_to_target_avg']:.0f}",
+                       delta="when passing")
+
+        cols2 = st.columns(4)
+        cols2[0].metric("Mean Return", f"{summary['mean_return']:.1%}")
+        cols2[1].metric("Winner Avg Return", f"{summary['mean_return_winners']:.1%}")
+        cols2[2].metric("Winner Avg Win Rate", f"{summary['mean_win_rate_winners']:.1%}")
+        cols2[3].metric("Loser Avg Trades", f"{summary['mean_trades_losers']:.0f}",
+                        delta="low signal = danger", delta_color="inverse")
+
+        st.markdown("---")
+
+        # ── Winner vs Blowup Anatomy ──
+        st.markdown('<div class="section-header">Winner vs Blowup Anatomy</div>', unsafe_allow_html=True)
+        comparison_df = winner_vs_blowup_stats(wf_ustec)
+        st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+
+        # ── Fold Comparison ──
+        st.markdown('<div class="section-header">Fold-by-Fold Breakdown</div>', unsafe_allow_html=True)
+        st.plotly_chart(plot_fold_comparison(wf_all, symbol_filter="USTEC"), use_container_width=True)
+
+        # ── Fold Clustering ──
+        st.plotly_chart(plot_fold_scatter(wf_ustec), use_container_width=True)
+
+        # ── Drawdown Paths ──
+        st.markdown('<div class="section-header">Drawdown Path Analysis</div>', unsafe_allow_html=True)
+        st.plotly_chart(plot_drawdown_paths(wf_ustec), use_container_width=True)
+        st.caption(
+            "Blowup folds (red) crash fast with very few trades (<50). "
+            "Winning folds (green) grow steadily with 400-700+ trades. "
+            "This explains why kill switches fail — blowups happen before there's enough data to detect them."
+        )
+
+    else:
+        st.warning("Walk-forward results not found. Run `scripts/walk_forward.py` first.")
+
+    st.markdown("---")
+
+    # ── Model Diagnostics (from backtest data) ──
+    st.markdown('<div class="section-header">Model Diagnostics</div>', unsafe_allow_html=True)
+
+    # Use USTEC model (or US100.cash mapped to USTEC)
+    diag_symbol = enabled_symbols[0] if enabled_symbols else "US100.cash"
+    bt_data = load_backtest_result(diag_symbol, config)
+
+    if bt_data:
+        probas = bt_data["probas"]
+        result = bt_data["result"]
+        test_df = bt_data["test_df"]
+
+        # Build outcomes from trades
+        if result.trades:
+            outcomes = np.array([1 if t.pnl > 0 else 0 for t in result.trades])
+            trade_confs = np.array([t.confidence for t in result.trades])
+
+            # ── Calibration ──
+            st.markdown("**Model Calibration**")
+            # For calibration, use probas vs target labels
+            targets = test_df.iloc[:len(probas)].get("target")
+            if targets is not None:
+                st.plotly_chart(
+                    plot_calibration_curve(probas, targets.values),
+                    use_container_width=True,
+                )
+            else:
+                st.info("Target labels not available for calibration plot.")
+
+            # ── Confidence Analysis ──
+            st.markdown("**Signal Confidence Analysis**")
+            st.plotly_chart(
+                plot_confidence_analysis(trade_confs, outcomes),
+                use_container_width=True,
+            )
+
+            # ── Feature Stability ──
+            st.markdown("**Feature Stability Across Training**")
+            importance = bt_data.get("importance")
+            if importance:
+                # Single fold importance — show as a reference
+                st.plotly_chart(
+                    plot_feature_stability([importance]),
+                    use_container_width=True,
+                )
+                st.caption(
+                    "With a single training run, this shows current feature importance. "
+                    "After walk-forward retraining, multiple folds will appear to show stability."
+                )
+            else:
+                st.info("Feature importance data not available.")
+
+            # ── Regime Performance ──
+            st.markdown("**Regime Performance Breakdown**")
+            model_sym = _get_model_symbol(diag_symbol, config)
+            data_dir = str(PROJECT_ROOT / "data" / "raw")
+            connector = MT5Connector()
+            h4_data = connector.load_data(model_sym, config["timeframes"]["regime"], data_dir)
+            if not h4_data.empty:
+                regime = RegimeDetector(n_states=3)
+                regime.fit(h4_data)
+                if regime._fitted:
+                    regime_labels = regime.predict_regime(h4_data)
+                    # Build trades DataFrame for regime analysis
+                    trades_data = pd.DataFrame([{
+                        "entry_time": t.entry_time,
+                        "pnl": t.pnl,
+                        "confidence": t.confidence,
+                        "direction": t.direction,
+                    } for t in result.trades])
+                    if not trades_data.empty:
+                        st.plotly_chart(
+                            plot_regime_performance(trades_data, regime_labels),
+                            use_container_width=True,
+                        )
+                    else:
+                        st.info("No trades to analyze by regime.")
+                else:
+                    st.info("Regime detector not fitted.")
+            else:
+                st.info("H4 data not available for regime analysis.")
+
+        else:
+            st.info("No trades in backtest result. Check model and signal configuration.")
+
+        # ── Live vs Backtest ──
+        st.markdown("---")
+        st.markdown('<div class="section-header">Live vs Backtest Comparison</div>', unsafe_allow_html=True)
+        st.plotly_chart(
+            plot_live_vs_backtest(pd.DataFrame(), {
+                "win_rate": result.win_rate if result else 0,
+                "avg_pnl": np.mean([t.pnl for t in result.trades]) if result and result.trades else 0,
+                "avg_confidence": np.mean([t.confidence for t in result.trades]) if result and result.trades else 0,
+                "trades_per_day": result.total_trades / 30 if result else 0,
+            }),
+            use_container_width=True,
+        )
+    else:
+        st.warning(f"Cannot load backtest data for {diag_symbol}. Ensure data files exist in data/raw/.")
+
+
 # ── PAGE: CONFIGURATION ──────────────────────────────────────────────
 
 elif page == "Configuration":
@@ -695,6 +877,29 @@ elif page == "Live Trading":
     else:
         st.warning("MT5 not connected. Start MetaTrader 5 terminal to enable live monitoring.")
         st.info("The dashboard works without MT5 for backtest analysis. Use the other tabs.")
+
+    # Signal log (always visible, doesn't need MT5)
+    st.markdown('<div class="section-header">Signal Log</div>', unsafe_allow_html=True)
+    signal_path = PROJECT_ROOT / "logs" / "signals.csv"
+    if signal_path.exists():
+        sig_df = pd.read_csv(signal_path)
+        if not sig_df.empty:
+            # Color-code actions
+            st.markdown(f"**{len(sig_df)} signals recorded** | "
+                        f"Trades: {len(sig_df[sig_df['action'] == 'trade_opened'])} | "
+                        f"No signal: {len(sig_df[sig_df['action'] == 'no_signal'])} | "
+                        f"Blocked: {len(sig_df[sig_df['action'].isin(['regime_blocked', 'risk_blocked'])])}")
+
+            display_df = sig_df.copy()
+            display_df["timestamp"] = pd.to_datetime(display_df["timestamp"]).dt.strftime("%m-%d %H:%M")
+            display_df["bar_time"] = pd.to_datetime(display_df["bar_time"]).dt.strftime("%m-%d %H:%M")
+            display_cols = ["timestamp", "bar_time", "symbol", "proba", "direction", "confidence",
+                            "regime_scalar", "lots", "action", "result"]
+            st.dataframe(display_df[display_cols].iloc[::-1], use_container_width=True, hide_index=True)
+        else:
+            st.info("No signals logged yet. Waiting for market hours.")
+    else:
+        st.info("Signal log not found. Start the live trader to begin recording.")
 
 
 # ── Footer ───────────────────────────────────────────────────────────

@@ -1,0 +1,37 @@
+FTMO ML Trading System - Run Instructions
+==========================================
+
+PREREQUISITES
+- MetaTrader 5 must be open and logged into your demo account
+- Python 3.10+ with dependencies installed (pip install -r requirements.txt)
+
+START THE BOT
+  cd "C:\Users\27795\Desktop\final attempt ML"
+  python -m src.live_trader
+
+WHAT IT DOES
+- Trades USTEC only during US session (13:00-21:00 UTC)
+- Polls MT5 every 5 seconds for new H1 bars
+- Generates buy/sell signals via ML ensemble (LightGBM + XGBoost + CatBoost)
+- Sizes positions at 1.75% risk per trade using ATR-based SL/TP
+- Enforces 3.5% daily loss halt and 9% total drawdown halt
+- Closes positions after 8 H1 bars (time barrier)
+- Syncs with MT5 SL/TP closures automatically
+
+MONITOR
+- Live log:  logs/trading.log
+- Status prints every 5 minutes to the log
+- MT5 terminal shows open positions and trade history
+
+STOP THE BOT
+- Press Ctrl+C in the terminal
+- All open positions remain on MT5 (SL/TP still active)
+
+RETRAIN THE MODEL
+  python -m src.pipeline
+
+ACCOUNT DETAILS
+- Login: 5048235373
+- Server: MetaQuotes-Demo
+- Balance: $100,000
+- Challenge: FTMO Phase 1 (10% target, 5% daily max loss, 10% total max loss)
